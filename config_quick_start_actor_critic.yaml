@@ -1,0 +1,10 @@
+# Quick start actor-critic training earlier
+# Add this override to your atari benchmark config
+
+training:
+  actor_critic:
+    start_after_epochs: 30  # Start earlier (default: 50)
+    steps_per_epoch: 40
+
+# This will make actor-critic start at epoch 31 instead of epoch 51
+# Useful if you want to test the full pipeline sooner

@@ -39,7 +39,7 @@ training:
   actor_critic:
     learning_rate: 2e-4
     batch_num_samples: 1024  # H200: extreme batches
-    start_after_epochs: 50
+    start_after_epochs: 30  # Start earlier for testing (was 50)
     critic_warmup_epochs: 0
     steps_per_epoch: 40  # Half steps for 2x batch
 
