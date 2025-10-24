@@ -26,7 +26,7 @@ from tqdm import tqdm
 import wandb
 from loguru import logger
 
-from agent import Agent
+from agent import Agent, _get_unwrapped_model
 from collector import Collector
 from envs import SingleProcessEnv, MultiProcessEnv
 from episode import Episode
@@ -617,7 +617,7 @@ class Trainer:
         batch = next(iter(dataloader))
         outputs = self.agent.actor_critic.imagine(self._to_device(batch), self.agent.tokenizer, self.agent.world_model, horizon=self.cfg.evaluation.actor_critic.horizon, show_pbar=True)
 
-        if isinstance(self.agent.actor_critic, ActorCriticLS):
+        if isinstance(_get_unwrapped_model(self.agent.actor_critic), ActorCriticLS):
             outputs.observations = torch.clamp(self.agent.tokenizer.tokenizers[ObsModality.image].decode(outputs.observations, should_postprocess=True), 0, 1).mul(255).byte()
 
         to_log = []
