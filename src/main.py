@@ -19,6 +19,7 @@ import torch._dynamo
 torch._dynamo.config.suppress_errors = True  # Keep for stability with einops
 torch._dynamo.config.cache_size_limit = 128  # Increase cache for better recompilation
 torch.set_float32_matmul_precision('high')  # Use TensorFloat32 for matmul
+# Note: Using torch.compile mode='default' instead of 'reduce-overhead' to avoid CUDA graph issues
 from einops._torch_specific import allow_ops_in_compiled_graph  # requires einops>=0.6.1
 allow_ops_in_compiled_graph()
 torch.set_printoptions(profile='short', sci_mode=False)
@@ -87,7 +88,8 @@ def build_agent(env, cfg, device):
         vgg_lpips_rel_path = cfg.tokenizer.image.vgg_lpips_ckpt_path
         cfg.tokenizer.image.vgg_lpips_ckpt_path = (project_root / vgg_lpips_rel_path).absolute()
         tokenizers[ObsModality.image] = instantiate(cfg.tokenizer.image)
-        tokenizers[ObsModality.image] = torch.compile(tokenizers[ObsModality.image], mode='reduce-overhead')
+        # Use default mode to avoid CUDA graph issues while maintaining good performance
+        tokenizers[ObsModality.image] = torch.compile(tokenizers[ObsModality.image], mode='default')
 
         ac_encoders[ObsModality.image] = ImageLatentObsEncoder(
             tokens_per_obs=tokenizers[ObsModality.image].tokens_per_obs,
@@ -183,9 +185,10 @@ def build_agent(env, cfg, device):
         device=device,
         **cfg.world_model
     )
-    # Compile models with reduce-overhead mode for better performance
-    world_model = torch.compile(world_model, mode='reduce-overhead')
-    actor_critic = torch.compile(actor_critic, mode='reduce-overhead')
+    # Use default mode to avoid CUDA graph issues while maintaining good performance
+    # This provides significant JIT speedup without the complexity of CUDA graphs
+    world_model = torch.compile(world_model, mode='default')
+    actor_critic = torch.compile(actor_critic, mode='default')
 
     return Agent(tokenizer, world_model, actor_critic)
 
