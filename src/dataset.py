@@ -649,7 +649,8 @@ def get_dataloader(
         padding_strategy: str,
         obs_modalities: set[ObsModality],
         replay_dist: Optional[CuriousReplayDistribution] = None,
-        num_workers: int = 0
+        num_workers: int = 0,
+        prefetch_factor: int = 2
 ):
     manager = RAMDEM(dataset, context_length=context_length)
     dataset = OfflineExperienceDataset(
@@ -664,13 +665,15 @@ def get_dataloader(
         batch_sampler = CuriousReplayBatchSampler(replay_dist, batch_size)
         dataset_iter = torch.utils.data.DataLoader(
             dataset, batch_sampler=batch_sampler, num_workers=num_workers,
-            pin_memory=True, persistent_workers=num_workers > 0
+            pin_memory=True, persistent_workers=num_workers > 0,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None
         )
     else:
         dataset_iter = torch.utils.data.DataLoader(
             dataset, batch_size=batch_size, shuffle=shuffle, drop_last=True,
             num_workers=num_workers, persistent_workers=num_workers > 0,
-            pin_memory=True
+            pin_memory=True,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None
         )
 
     return dataset_iter

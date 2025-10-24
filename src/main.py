@@ -459,6 +459,7 @@ class Trainer:
         if info_handler is not None:
             info_handler.signal_epoch_start()
 
+        prefetch_factor = getattr(self.cfg.common, 'prefetch_factor', 2)
         dataloader = get_dataloader(
             self.train_dataset,
             context_len,
@@ -469,6 +470,7 @@ class Trainer:
             obs_modalities=self.agent.tokenizer.modalities,
             replay_dist=replay_dist,
             num_workers=self.cfg.common.num_dataloader_workers,
+            prefetch_factor=prefetch_factor,
         )
 
         data_iter = iter(dataloader)
