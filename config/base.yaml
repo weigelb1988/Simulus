@@ -41,7 +41,7 @@ common:
   sequence_length: ${world_model.retnet.max_blocks}
   resume: False # set by resume.sh script only.
   float32_matmul_precision: 'highest'
-  num_dataloader_workers: 6
+  num_dataloader_workers: 4  # Reduced from 6 to reduce overhead
 
 collection:
   train:
@@ -80,7 +80,7 @@ training:
     steps_per_epoch: 200
   world_model:
     learning_rate: 2e-4
-    batch_num_samples: 128
+    batch_num_samples: 64  # Reduced from 128 to balance speed and memory
     grad_acc_steps: 1
     max_grad_norm: 3.0
     weight_decay: 0.05
