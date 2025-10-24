@@ -282,9 +282,15 @@ class Trainer:
         self.optimizer_actor_critic = torch.optim.AdamW(self.agent.actor_critic.parameters(), lr=cfg.training.actor_critic.learning_rate)
 
         # Initialize GradScaler for mixed precision training
-        self.scaler_tokenizer = torch.amp.GradScaler('cuda') if self.agent.tokenizer.is_trainable else None
-        self.scaler_world_model = torch.amp.GradScaler('cuda')
-        self.scaler_actor_critic = torch.amp.GradScaler('cuda')
+        # Using bfloat16 on H100/H200 GPUs for better numerical stability
+        self.use_bf16 = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
+        self.amp_dtype = torch.bfloat16 if self.use_bf16 else torch.float16
+        logger.info(f'Using mixed precision training with dtype: {self.amp_dtype}')
+
+        # Note: GradScaler not needed for bfloat16, but we keep it for compatibility
+        self.scaler_tokenizer = torch.amp.GradScaler('cuda', enabled=not self.use_bf16) if self.agent.tokenizer.is_trainable else None
+        self.scaler_world_model = torch.amp.GradScaler('cuda', enabled=not self.use_bf16)
+        self.scaler_actor_critic = torch.amp.GradScaler('cuda', enabled=not self.use_bf16)
 
         self.actor_critic_info_handler = ControllerInfoHandler()
 
@@ -478,8 +484,8 @@ class Trainer:
                 assert (batch['mask_padding'].sum(dim=1) > context_len).all()
                 batch = self._to_device(batch)
 
-                # Use automatic mixed precision
-                with torch.amp.autocast('cuda', enabled=(scaler is not None)):
+                # Use automatic mixed precision (bfloat16 on H100/H200, float16 elsewhere)
+                with torch.amp.autocast('cuda', enabled=(scaler is not None), dtype=self.amp_dtype):
                     losses, info = component.compute_loss(batch, epoch=epoch, num_epochs=self.cfg.common.epochs, **kwargs_loss)
 
                     if replay_dist is not None:

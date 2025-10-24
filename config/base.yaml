@@ -40,12 +40,12 @@ common:
   seed: 1
   sequence_length: ${world_model.retnet.max_blocks}
   resume: False # set by resume.sh script only.
-  float32_matmul_precision: 'highest'
-  num_dataloader_workers: 4  # Reduced from 6 to reduce overhead
+  float32_matmul_precision: 'high'  # TF32 for H200
+  num_dataloader_workers: 8  # H200 can handle more parallel loading
 
 collection:
   train:
-    num_envs: 8
+    num_envs: 16  # H200 can handle more parallel environments
     stop_after_epochs: ${...common.epochs}
     num_episodes_to_save: 10
     config:
@@ -73,14 +73,14 @@ training:
   learning_rate: 1e-4
   tokenizer:
     learning_rate: 1e-4
-    batch_num_samples: 128
+    batch_num_samples: 256  # H200 can handle large batches
     grad_acc_steps: 1
     max_grad_norm: 10.0
     start_after_epochs: 5
     steps_per_epoch: 200
   world_model:
     learning_rate: 2e-4
-    batch_num_samples: 64  # Reduced from 128 to balance speed and memory
+    batch_num_samples: 256  # H200 can handle large batches with 141GB memory
     grad_acc_steps: 1
     max_grad_norm: 3.0
     weight_decay: 0.05
@@ -89,7 +89,7 @@ training:
     steps_per_epoch: 200
   actor_critic:
     learning_rate: 2e-4
-    batch_num_samples: 128
+    batch_num_samples: 256  # H200 can handle large batches
     grad_acc_steps: 1
     max_grad_norm: 3.0
     start_after_epochs: 35

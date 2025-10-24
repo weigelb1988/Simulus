@@ -33,12 +33,12 @@ training:
     start_after_epochs: 5
     steps_per_epoch: 200
   world_model:
-    batch_num_samples: 64  # Reduced from 128 to balance speed and memory
+    batch_num_samples: 256  # H200 optimized
     start_after_epochs: 25
     steps_per_epoch: 200
   actor_critic:
     learning_rate: 2e-4
-    batch_num_samples: 128
+    batch_num_samples: 256  # H200 optimized
     start_after_epochs: 50
     critic_warmup_epochs: 0
     steps_per_epoch: 80
