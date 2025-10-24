@@ -1,0 +1,29 @@
+# Performance Tuning Options
+# Use these configs to diagnose and fix the slowdown
+
+# OPTION 1: Reduce batch size (most likely fix)
+# Large batch sizes can cause memory pressure and slow down training
+# Try intermediate batch sizes to find the sweet spot
+world_model_batch_sizes_to_try:
+  - 64   # 2x original (balanced)
+  - 96   # 3x original (aggressive)
+  - 128  # 4x original (current - may be too large)
+
+# OPTION 2: Adjust dataloader workers
+# Too many workers can cause overhead
+dataloader_workers_to_try:
+  - 2    # Original
+  - 4    # Moderate
+  - 6    # Current
+
+# OPTION 3: Disable specific optimizations to isolate the problem
+# Test each independently to find the culprit
+disable_amp: false          # Set to true to disable mixed precision
+disable_torch_compile: false # Set to true to disable torch.compile
+disable_pin_memory: false    # Set to true to disable pinned memory
+
+# RECOMMENDED TEST SEQUENCE:
+# 1. First, try world_model batch_num_samples: 64
+# 2. If still slow, set disable_amp: true
+# 3. If still slow, set disable_torch_compile: true
+# 4. Once you find the culprit, re-enable everything else

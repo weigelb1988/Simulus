@@ -15,7 +15,11 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 import torch.nn as nn
 import torch._dynamo
-torch._dynamo.config.suppress_errors = True
+# Optimize torch.compile for better performance
+torch._dynamo.config.suppress_errors = True  # Keep for stability with einops
+torch._dynamo.config.cache_size_limit = 128  # Increase cache for better recompilation
+torch.set_float32_matmul_precision('high')  # Use TensorFloat32 for matmul
+# Note: Using torch.compile mode='default' instead of 'reduce-overhead' to avoid CUDA graph issues
 from einops._torch_specific import allow_ops_in_compiled_graph  # requires einops>=0.6.1
 allow_ops_in_compiled_graph()
 torch.set_printoptions(profile='short', sci_mode=False)
@@ -23,7 +27,7 @@ from tqdm import tqdm
 import wandb
 from loguru import logger
 
-from agent import Agent
+from agent import Agent, _get_unwrapped_model
 from collector import Collector
 from envs import SingleProcessEnv, MultiProcessEnv
 from episode import Episode
@@ -41,6 +45,12 @@ from utils import (
     TrainerInfoHandler, ControllerInfoHandler, ObsModality
 )
 from dataset import get_dataloader, CuriousReplayDistribution, EpisodeDirManager, NpCuriousReplayDistribution
+
+
+def _get_model_name(model):
+    """Get clean model name for logging, handling torch.compiled models."""
+    unwrapped = _get_unwrapped_model(model)
+    return unwrapped.__class__.__name__
 
 
 class RunMetadata:
@@ -84,7 +94,8 @@ def build_agent(env, cfg, device):
         vgg_lpips_rel_path = cfg.tokenizer.image.vgg_lpips_ckpt_path
         cfg.tokenizer.image.vgg_lpips_ckpt_path = (project_root / vgg_lpips_rel_path).absolute()
         tokenizers[ObsModality.image] = instantiate(cfg.tokenizer.image)
-        tokenizers[ObsModality.image].compile()
+        # Use default mode to avoid CUDA graph issues while maintaining good performance
+        tokenizers[ObsModality.image] = torch.compile(tokenizers[ObsModality.image], mode='default')
 
         ac_encoders[ObsModality.image] = ImageLatentObsEncoder(
             tokens_per_obs=tokenizers[ObsModality.image].tokens_per_obs,
@@ -180,8 +191,10 @@ def build_agent(env, cfg, device):
         device=device,
         **cfg.world_model
     )
-    world_model.compile()
-    actor_critic.compile()
+    # Use default mode to avoid CUDA graph issues while maintaining good performance
+    # This provides significant JIT speedup without the complexity of CUDA graphs
+    world_model = torch.compile(world_model, mode='default')
+    actor_critic = torch.compile(actor_critic, mode='default')
 
     return Agent(tokenizer, world_model, actor_critic)
 
@@ -267,6 +280,17 @@ class Trainer:
 
         self.optimizer_world_model = configure_optimizer(self.agent.world_model, cfg.training.world_model.learning_rate, cfg.training.world_model.weight_decay)
         self.optimizer_actor_critic = torch.optim.AdamW(self.agent.actor_critic.parameters(), lr=cfg.training.actor_critic.learning_rate)
+
+        # Initialize GradScaler for mixed precision training
+        # Using bfloat16 on H100/H200 GPUs for better numerical stability
+        self.use_bf16 = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
+        self.amp_dtype = torch.bfloat16 if self.use_bf16 else torch.float16
+        logger.info(f'Using mixed precision training with dtype: {self.amp_dtype}')
+
+        # Note: GradScaler not needed for bfloat16, but we keep it for compatibility
+        self.scaler_tokenizer = torch.amp.GradScaler('cuda', enabled=not self.use_bf16) if self.agent.tokenizer.is_trainable else None
+        self.scaler_world_model = torch.amp.GradScaler('cuda', enabled=not self.use_bf16)
+        self.scaler_actor_critic = torch.amp.GradScaler('cuda', enabled=not self.use_bf16)
 
         self.actor_critic_info_handler = ControllerInfoHandler()
 
@@ -376,6 +400,7 @@ class Trainer:
                     sample_from_start=True,
                     context_len=0,
                     info_handler=self.tokenizer_info_handler,
+                    scaler=self.scaler_tokenizer,
                     **cfg_tokenizer
                 )
                 logger.info(metrics_tokenizer)
@@ -391,6 +416,7 @@ class Trainer:
                 tokenizer=self.agent.tokenizer,
                 context_len=self.cfg.world_model.context_length,
                 replay_dist=self.wm_crd,
+                scaler=self.scaler_world_model,
                 **cfg_world_model
             )
             logger.info(metrics_world_model)
@@ -400,16 +426,17 @@ class Trainer:
         actor_start = critic_start + self.cfg.training.actor_critic.critic_warmup_epochs
         if epoch > cfg_actor_critic.start_after_epochs:
             metrics_actor_critic = self.train_component(
-                epoch, 
-                self.agent.actor_critic, 
+                epoch,
+                self.agent.actor_critic,
                 self.optimizer_actor_critic,
                 sequence_length=self.cfg.training.actor_critic.burn_in + self.cfg.world_model.context_length,
                 sample_from_start=False,
-                tokenizer=self.agent.tokenizer, 
-                world_model=self.agent.world_model, 
+                tokenizer=self.agent.tokenizer,
+                world_model=self.agent.world_model,
                 context_len=self.cfg.world_model.context_length + 1,  # we drop the last obs in case it's terminal.
                 actor_start_epoch=actor_start,
                 info_handler=self.actor_critic_info_handler,
+                scaler=self.scaler_actor_critic,
                 **cfg_actor_critic
             )
             logger.info(metrics_actor_critic)
@@ -421,7 +448,8 @@ class Trainer:
             self, epoch: int, component: nn.Module, optimizer: torch.optim.Optimizer, steps_per_epoch: int,
             batch_num_samples: int, grad_acc_steps: int, max_grad_norm: Optional[float],
             sequence_length: int, sample_from_start: bool, context_len: int, info_handler: TrainerInfoHandler = None,
-            replay_dist: Optional[CuriousReplayDistribution] = None, **kwargs_loss: Any
+            replay_dist: Optional[CuriousReplayDistribution] = None, scaler: Optional[torch.amp.GradScaler] = None,
+            **kwargs_loss: Any
     ) -> Dict[str, float]:
         loss_total_epoch = 0.0
         intermediate_losses = defaultdict(float)
@@ -431,6 +459,7 @@ class Trainer:
         if info_handler is not None:
             info_handler.signal_epoch_start()
 
+        prefetch_factor = getattr(self.cfg.common, 'prefetch_factor', 2)
         dataloader = get_dataloader(
             self.train_dataset,
             context_len,
@@ -441,10 +470,11 @@ class Trainer:
             obs_modalities=self.agent.tokenizer.modalities,
             replay_dist=replay_dist,
             num_workers=self.cfg.common.num_dataloader_workers,
+            prefetch_factor=prefetch_factor,
         )
 
         data_iter = iter(dataloader)
-        for _ in tqdm(range(steps_per_epoch), desc=f"Training {str(component)}", file=sys.stdout):
+        for _ in tqdm(range(steps_per_epoch), desc=f"Training {_get_model_name(component)}", file=sys.stdout):
             optimizer.zero_grad()
             for _ in range(grad_acc_steps):
                 try:
@@ -456,39 +486,58 @@ class Trainer:
                 assert (batch['mask_padding'].sum(dim=1) > context_len).all()
                 batch = self._to_device(batch)
 
-                losses, info = component.compute_loss(batch, epoch=epoch, num_epochs=self.cfg.common.epochs, **kwargs_loss)
+                # Use automatic mixed precision (bfloat16 on H100/H200, float16 elsewhere)
+                with torch.amp.autocast('cuda', enabled=(scaler is not None), dtype=self.amp_dtype):
+                    losses, info = component.compute_loss(batch, epoch=epoch, num_epochs=self.cfg.common.epochs, **kwargs_loss)
 
-                if replay_dist is not None:
-                    assert 'per_sample_loss' in info
-                    replay_dist.update_losses(info['per_sample_loss'].detach().cpu().numpy())
+                    if replay_dist is not None:
+                        assert 'per_sample_loss' in info
+                        replay_dist.update_losses(info['per_sample_loss'].detach().cpu().numpy())
 
-                losses = losses / grad_acc_steps
-                loss_total_step = losses.loss_total
-                loss_total_step.backward()
+                    losses = losses / grad_acc_steps
+                    loss_total_step = losses.loss_total
+
+                # Backward pass with gradient scaling
+                if scaler is not None:
+                    scaler.scale(loss_total_step).backward()
+                else:
+                    loss_total_step.backward()
+
                 loss_total_epoch += loss_total_step.item() / steps_per_epoch
 
                 if info_handler is not None:
                     info_handler.update_with_step_info(info)
 
                 for loss_name, loss_value in losses.intermediate_losses.items():
-                    intermediate_losses[f"{str(component)}/train/{loss_name}"] += loss_value / steps_per_epoch
+                    intermediate_losses[f"{_get_model_name(component)}/train/{loss_name}"] += loss_value / steps_per_epoch
 
-            if max_grad_norm is not None:
-                grad_norm = torch.nn.utils.clip_grad_norm_(component.parameters(), max_grad_norm)
+            # Gradient clipping and optimizer step with scaler
+            if scaler is not None:
+                if max_grad_norm is not None:
+                    scaler.unscale_(optimizer)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(component.parameters(), max_grad_norm)
+                else:
+                    scaler.unscale_(optimizer)
+                    grad_norm = np.sqrt(
+                        sum([p.grad.norm(2).item() ** 2 for p in component.parameters() if p.grad is not None]))
+                grad_norms_info(grad_norm)
+                scaler.step(optimizer)
+                scaler.update()
             else:
-                grad_norm = np.sqrt(
-                    sum([p.grad.norm(2).item() ** 2 for p in component.parameters() if p.grad is not None]))
-            grad_norms_info(grad_norm)
-
-
-            optimizer.step()
+                if max_grad_norm is not None:
+                    grad_norm = torch.nn.utils.clip_grad_norm_(component.parameters(), max_grad_norm)
+                else:
+                    grad_norm = np.sqrt(
+                        sum([p.grad.norm(2).item() ** 2 for p in component.parameters() if p.grad is not None]))
+                grad_norms_info(grad_norm)
+                optimizer.step()
 
         epoch_info = {}
         if info_handler is not None:
-            epoch_info = {f'{str(component)}/train/{k}': v for k, v in info_handler.get_epoch_info().items()}
+            epoch_info = {f'{_get_model_name(component)}/train/{k}': v for k, v in info_handler.get_epoch_info().items()}
         for k, v in grad_norms_info.get_info().items():
-            epoch_info[f"{str(component)}/train/{k}"] = v
-        metrics = {f'{str(component)}/train/total_loss': loss_total_epoch, **intermediate_losses, **epoch_info}
+            epoch_info[f"{_get_model_name(component)}/train/{k}"] = v
+        metrics = {f'{_get_model_name(component)}/train/total_loss': loss_total_epoch, **intermediate_losses, **epoch_info}
         return metrics
 
     @torch.no_grad()
@@ -537,7 +586,7 @@ class Trainer:
         intermediate_losses = defaultdict(float)
 
         steps = 0
-        pbar = tqdm(desc=f"Evaluating {str(component)}", file=sys.stdout)
+        pbar = tqdm(desc=f"Evaluating {_get_model_name(component)}", file=sys.stdout)
         dataloader = get_dataloader(
                 self.test_dataset,
                 context_length,
@@ -558,7 +607,7 @@ class Trainer:
             loss_total_epoch += losses.loss_total.item()
 
             for loss_name, loss_value in losses.intermediate_losses.items():
-                intermediate_losses[f"{str(component)}/eval/{loss_name}"] += loss_value
+                intermediate_losses[f"{_get_model_name(component)}/eval/{loss_name}"] += loss_value
 
             steps += 1
             pbar.update(1)
@@ -566,7 +615,7 @@ class Trainer:
         if steps == 0:
             return {}
         intermediate_losses = {k: v / steps for k, v in intermediate_losses.items()}
-        metrics = {f'{str(component)}/eval/total_loss': loss_total_epoch / steps, **intermediate_losses}
+        metrics = {f'{_get_model_name(component)}/eval/total_loss': loss_total_epoch / steps, **intermediate_losses}
         return metrics
 
     @torch.no_grad()
@@ -585,7 +634,7 @@ class Trainer:
         batch = next(iter(dataloader))
         outputs = self.agent.actor_critic.imagine(self._to_device(batch), self.agent.tokenizer, self.agent.world_model, horizon=self.cfg.evaluation.actor_critic.horizon, show_pbar=True)
 
-        if isinstance(self.agent.actor_critic, ActorCriticLS):
+        if isinstance(_get_unwrapped_model(self.agent.actor_critic), ActorCriticLS):
             outputs.observations = torch.clamp(self.agent.tokenizer.tokenizers[ObsModality.image].decode(outputs.observations, should_postprocess=True), 0, 1).mul(255).byte()
 
         to_log = []
@@ -611,9 +660,12 @@ class Trainer:
             optimizers_states_dict = {
                 "optimizer_world_model": self.optimizer_world_model.state_dict(),
                 "optimizer_actor_critic": self.optimizer_actor_critic.state_dict(),
+                "scaler_world_model": self.scaler_world_model.state_dict(),
+                "scaler_actor_critic": self.scaler_actor_critic.state_dict(),
             }
             if self.agent.tokenizer is not None and self.agent.tokenizer.is_trainable:
                 optimizers_states_dict["optimizer_tokenizer"] = self.optimizer_tokenizer.state_dict()
+                optimizers_states_dict["scaler_tokenizer"] = self.scaler_tokenizer.state_dict()
             torch.save(optimizers_states_dict, self.ckpt_dir / 'optimizer.pt')
             ckpt_dataset_dir = self.ckpt_dir / 'dataset'
             ckpt_dataset_dir.mkdir(exist_ok=True, parents=False)
@@ -640,8 +692,14 @@ class Trainer:
         ckpt_opt = torch.load(self.ckpt_dir / 'optimizer.pt', map_location=self.device)
         if self.agent.tokenizer is not None and self.agent.tokenizer.is_trainable:
             self.optimizer_tokenizer.load_state_dict(ckpt_opt['optimizer_tokenizer'])
+            if 'scaler_tokenizer' in ckpt_opt:
+                self.scaler_tokenizer.load_state_dict(ckpt_opt['scaler_tokenizer'])
         self.optimizer_world_model.load_state_dict(ckpt_opt['optimizer_world_model'])
         self.optimizer_actor_critic.load_state_dict(ckpt_opt['optimizer_actor_critic'])
+        if 'scaler_world_model' in ckpt_opt:
+            self.scaler_world_model.load_state_dict(ckpt_opt['scaler_world_model'])
+        if 'scaler_actor_critic' in ckpt_opt:
+            self.scaler_actor_critic.load_state_dict(ckpt_opt['scaler_actor_critic'])
         self.train_dataset.load_disk_checkpoint(self.ckpt_dir / 'dataset')
         if self.cfg.evaluation.should:
             self.test_dataset.num_seen_episodes = torch.load(self.ckpt_dir / 'num_seen_episodes_test_dataset.pt')
