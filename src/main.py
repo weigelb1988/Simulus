@@ -47,6 +47,12 @@ from utils import (
 from dataset import get_dataloader, CuriousReplayDistribution, EpisodeDirManager, NpCuriousReplayDistribution
 
 
+def _get_model_name(model):
+    """Get clean model name for logging, handling torch.compiled models."""
+    unwrapped = _get_unwrapped_model(model)
+    return unwrapped.__class__.__name__
+
+
 class RunMetadata:
     def __init__(
             self,
@@ -460,7 +466,7 @@ class Trainer:
         )
 
         data_iter = iter(dataloader)
-        for _ in tqdm(range(steps_per_epoch), desc=f"Training {str(component)}", file=sys.stdout):
+        for _ in tqdm(range(steps_per_epoch), desc=f"Training {_get_model_name(component)}", file=sys.stdout):
             optimizer.zero_grad()
             for _ in range(grad_acc_steps):
                 try:
@@ -495,7 +501,7 @@ class Trainer:
                     info_handler.update_with_step_info(info)
 
                 for loss_name, loss_value in losses.intermediate_losses.items():
-                    intermediate_losses[f"{str(component)}/train/{loss_name}"] += loss_value / steps_per_epoch
+                    intermediate_losses[f"{_get_model_name(component)}/train/{loss_name}"] += loss_value / steps_per_epoch
 
             # Gradient clipping and optimizer step with scaler
             if scaler is not None:
@@ -520,10 +526,10 @@ class Trainer:
 
         epoch_info = {}
         if info_handler is not None:
-            epoch_info = {f'{str(component)}/train/{k}': v for k, v in info_handler.get_epoch_info().items()}
+            epoch_info = {f'{_get_model_name(component)}/train/{k}': v for k, v in info_handler.get_epoch_info().items()}
         for k, v in grad_norms_info.get_info().items():
-            epoch_info[f"{str(component)}/train/{k}"] = v
-        metrics = {f'{str(component)}/train/total_loss': loss_total_epoch, **intermediate_losses, **epoch_info}
+            epoch_info[f"{_get_model_name(component)}/train/{k}"] = v
+        metrics = {f'{_get_model_name(component)}/train/total_loss': loss_total_epoch, **intermediate_losses, **epoch_info}
         return metrics
 
     @torch.no_grad()
@@ -572,7 +578,7 @@ class Trainer:
         intermediate_losses = defaultdict(float)
 
         steps = 0
-        pbar = tqdm(desc=f"Evaluating {str(component)}", file=sys.stdout)
+        pbar = tqdm(desc=f"Evaluating {_get_model_name(component)}", file=sys.stdout)
         dataloader = get_dataloader(
                 self.test_dataset,
                 context_length,
@@ -593,7 +599,7 @@ class Trainer:
             loss_total_epoch += losses.loss_total.item()
 
             for loss_name, loss_value in losses.intermediate_losses.items():
-                intermediate_losses[f"{str(component)}/eval/{loss_name}"] += loss_value
+                intermediate_losses[f"{_get_model_name(component)}/eval/{loss_name}"] += loss_value
 
             steps += 1
             pbar.update(1)
@@ -601,7 +607,7 @@ class Trainer:
         if steps == 0:
             return {}
         intermediate_losses = {k: v / steps for k, v in intermediate_losses.items()}
-        metrics = {f'{str(component)}/eval/total_loss': loss_total_epoch / steps, **intermediate_losses}
+        metrics = {f'{_get_model_name(component)}/eval/total_loss': loss_total_epoch / steps, **intermediate_losses}
         return metrics
 
     @torch.no_grad()
