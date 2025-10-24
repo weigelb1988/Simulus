@@ -31,17 +31,17 @@ collection:
 training:
   tokenizer:
     start_after_epochs: 5
-    steps_per_epoch: 200
+    steps_per_epoch: 100  # Reduced for larger batches
   world_model:
-    batch_num_samples: 512  # H200: push harder, only using 4.5% memory
+    batch_num_samples: 1024  # H200: extreme batches, 92% memory free
     start_after_epochs: 25
-    steps_per_epoch: 200
+    steps_per_epoch: 100  # Fewer steps with 2x batch
   actor_critic:
     learning_rate: 2e-4
-    batch_num_samples: 512  # H200: push harder
+    batch_num_samples: 1024  # H200: extreme batches
     start_after_epochs: 50
     critic_warmup_epochs: 0
-    steps_per_epoch: 80
+    steps_per_epoch: 40  # Half steps for 2x batch
 
 evaluation:
   every: 20

@@ -41,8 +41,8 @@ common:
   sequence_length: ${world_model.retnet.max_blocks}
   resume: False # set by resume.sh script only.
   float32_matmul_precision: 'high'  # TF32 for H200
-  num_dataloader_workers: 12  # Increase to prevent CPU bottleneck on H200
-  prefetch_factor: 4  # Prefetch more batches to keep GPU fed
+  num_dataloader_workers: 16  # Max out CPU cores for data loading
+  prefetch_factor: 8  # Aggressive prefetching to prevent GPU starvation
 
 collection:
   train:
@@ -74,28 +74,28 @@ training:
   learning_rate: 1e-4
   tokenizer:
     learning_rate: 1e-4
-    batch_num_samples: 512  # H200: Only using 6.5GB, push harder
+    batch_num_samples: 1024  # H200: 92% memory free, push to extreme
     grad_acc_steps: 1
     max_grad_norm: 10.0
     start_after_epochs: 5
-    steps_per_epoch: 200
+    steps_per_epoch: 100  # Half steps, double batch = same samples
   world_model:
     learning_rate: 2e-4
-    batch_num_samples: 512  # H200: Only using 6.5GB/144GB, 8x increase
+    batch_num_samples: 1024  # H200: Extreme batch to reduce dataloader overhead
     grad_acc_steps: 1
     max_grad_norm: 3.0
     weight_decay: 0.05
     replay_sampling_uniform_fraction: 0.7
     start_after_epochs: 25
-    steps_per_epoch: 200
+    steps_per_epoch: 100  # Fewer steps with larger batches
   actor_critic:
     learning_rate: 2e-4
-    batch_num_samples: 512  # H200: Push harder with more memory
+    batch_num_samples: 1024  # H200: Max out batches
     grad_acc_steps: 1
     max_grad_norm: 3.0
     start_after_epochs: 35
     critic_warmup_epochs: 0
-    steps_per_epoch: 80
+    steps_per_epoch: 40  # Half steps to compensate for 2x batch
     imagine_horizon: ${common.sequence_length}
     burn_in: 20
     gamma: 0.99
