@@ -41,11 +41,11 @@ common:
   sequence_length: ${world_model.retnet.max_blocks}
   resume: False # set by resume.sh script only.
   float32_matmul_precision: 'highest'
-  num_dataloader_workers: 2
+  num_dataloader_workers: 6
 
 collection:
   train:
-    num_envs: 1
+    num_envs: 8
     stop_after_epochs: ${...common.epochs}
     num_episodes_to_save: 10
     config:
@@ -80,7 +80,7 @@ training:
     steps_per_epoch: 200
   world_model:
     learning_rate: 2e-4
-    batch_num_samples: 32
+    batch_num_samples: 128
     grad_acc_steps: 1
     max_grad_norm: 3.0
     weight_decay: 0.05

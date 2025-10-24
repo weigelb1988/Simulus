@@ -662,11 +662,15 @@ def get_dataloader(
     if replay_dist is not None:
         replay_dist.update_num_samples(manager.samples_count)
         batch_sampler = CuriousReplayBatchSampler(replay_dist, batch_size)
-        dataset_iter = torch.utils.data.DataLoader(dataset, batch_sampler=batch_sampler, num_workers=num_workers)
+        dataset_iter = torch.utils.data.DataLoader(
+            dataset, batch_sampler=batch_sampler, num_workers=num_workers,
+            pin_memory=True, persistent_workers=num_workers > 0
+        )
     else:
         dataset_iter = torch.utils.data.DataLoader(
             dataset, batch_size=batch_size, shuffle=shuffle, drop_last=True,
             num_workers=num_workers, persistent_workers=num_workers > 0,
+            pin_memory=True
         )
 
     return dataset_iter
