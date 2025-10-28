@@ -97,6 +97,41 @@ For more options, use `python src/play.py --help` or see details below.
 For example, to visualize the Craftax agent, download `Craftax.pt` from our [HuggingFace repo](https://huggingface.co/leorc/M3), place it in `Simulus/checkpoints/Craftax.pt` and launch `python src/play.py craftax -p checkpoints/Craftax.pt` (from the attached Docker container).
 
 
+## 🎬 Imagination-Based Forward Prediction
+
+The `imagine.py` script allows you to use a trained world model to imagine forward from a real environment state without running the actual simulation. This is useful for visualizing what the world model has learned and for planning applications.
+
+```bash
+python src/imagine.py <benchmark> -p <path-to-model-weights> [options]
+```
+
+**Key Options:**
+- `-s, --start-step`: Step in the episode to start imagination from (default: 10)
+- `-h, --horizon`: Number of steps to imagine forward (default: 50)
+- `--use-policy`: Use the trained policy for actions (default: random actions)
+- `-c, --context-length`: Number of context steps for world model (default: from config)
+- `-o, --output`: Output path for the GIF file (default: imagination.gif)
+- `--fps`: Frames per second for the GIF (default: 15)
+- `--seed`: Random seed for environment initialization
+
+**Example:**
+```bash
+# Imagine 50 steps forward using random actions
+python src/imagine.py atari -p checkpoints/Atari.pt -s 20 -h 50 -o imagination_atari.gif
+
+# Use the trained policy instead of random actions
+python src/imagine.py craftax -p checkpoints/Craftax.pt -s 10 -h 100 --use-policy -o imagination_craftax.gif
+```
+
+The script will:
+1. Run a real environment to the specified starting step
+2. Use the last few observations as context for the world model
+3. Imagine forward for the specified horizon using the world model
+4. Save the imagined trajectory as an animated GIF
+
+This demonstrates the world model's ability to predict future observations, rewards, and episode termination without actual environment simulation.
+
+
 ## 🛠️ Configuration
 
 - All configuration files are located in `config/`, the main configuration file is `config/base.yaml`.
