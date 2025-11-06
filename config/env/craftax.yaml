@@ -1,6 +1,6 @@
 train:
   _target_: envs.make_craftax
-  id: "Craftax-Symbolic-v1"
+  id: "Craftax-Pixels-v1"
 
 test:
   _target_: ${..train._target_}

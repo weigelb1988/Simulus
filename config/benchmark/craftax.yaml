@@ -32,16 +32,16 @@ collection:
 
 training:
   tokenizer:
-    start_after_epochs: 50
+    start_after_epochs: 5  # Start much earlier for pixel-based learning
     steps_per_epoch: 100
   world_model:
     batch_num_samples: 256  # H200 optimized (was 8!)
-    start_after_epochs: 100  # Start earlier for testing (was 250)
+    start_after_epochs: 50  # Adjusted for pixel-based learning (was 100)
     steps_per_epoch: 100
   actor_critic:
     learning_rate: 2e-4
     batch_num_samples: 256  # H200 optimized (was 128)
-    start_after_epochs: 150  # Start earlier for testing (was 300)
+    start_after_epochs: 75  # Adjusted for pixel-based learning (was 150)
     critic_warmup_epochs: 0
     steps_per_epoch: 50
 

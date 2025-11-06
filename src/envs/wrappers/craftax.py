@@ -1,11 +1,12 @@
 import os
-from typing import SupportsFloat, Any
+from typing import SupportsFloat, Any, Tuple
 
 import numpy as np
 import torch
 import gymnasium
 from gymnasium import Env
 from gymnasium.core import ObsType, ActType, WrapperObsType, WrapperActType
+from PIL import Image
 
 from envs.wrappers.multi_modal import MultiModalObsWrapper, DictObsWrapper
 from utils import ObsModality
@@ -20,15 +21,68 @@ def make_craftax(id: str = "Craftax-Symbolic-v1"):
 
     env = make_craftax_env_from_name(id, auto_reset=True)
     env = GymnaxToGymWrapper(env)
-    env = CraftaxWrapper(env)
     env = InfoWrapper(env)
-    env = MultiModalObsWrapper(env, obs_key_to_modality={
-        'map': ObsModality.token_2d,
-        'stats': ObsModality.vector,
-        'direction': ObsModality.token,
-    })
+
+    # Check if this is a pixel-based environment
+    if "Pixels" in id:
+        # For pixel environments, convert to uint8, resize, and use image modality
+        env = FloatToUint8Wrapper(env)
+        env = ResizeObsWrapper(env, (64, 64))
+        env = DictObsWrapper(env)
+        env = MultiModalObsWrapper(env, obs_key_to_modality={
+            DictObsWrapper.key: ObsModality.image
+        })
+    else:
+        # For symbolic environments, use the original wrapper
+        env = CraftaxWrapper(env)
+        env = MultiModalObsWrapper(env, obs_key_to_modality={
+            'map': ObsModality.token_2d,
+            'stats': ObsModality.vector,
+            'direction': ObsModality.token,
+        })
 
     return env
+
+
+class FloatToUint8Wrapper(gymnasium.ObservationWrapper):
+    """Converts float observations in range [0.0, 1.0] to uint8 in range [0, 255]"""
+
+    def __init__(self, env: gymnasium.Env) -> None:
+        super().__init__(env)
+        # Update observation space to uint8
+        old_space = env.observation_space
+        self.observation_space = gymnasium.spaces.Box(
+            low=0, high=255,
+            shape=old_space.shape,
+            dtype=np.uint8
+        )
+
+    def observation(self, observation: np.ndarray) -> np.ndarray:
+        # Convert from float [0.0, 1.0] to uint8 [0, 255]
+        return (observation * 255).astype(np.uint8)
+
+
+class ResizeObsWrapper(gymnasium.ObservationWrapper):
+    """Resizes image observations to a target size"""
+
+    def __init__(self, env: gymnasium.Env, size: Tuple[int, int]) -> None:
+        super().__init__(env)
+        self.size = tuple(size)
+        self.observation_space = gymnasium.spaces.Box(
+            low=0, high=255,
+            shape=(size[0], size[1], 3),
+            dtype=np.uint8
+        )
+        self.unwrapped.original_obs = None
+
+    def resize(self, obs: np.ndarray):
+        img = Image.fromarray(obs)
+        img = img.resize(self.size, Image.BILINEAR)
+        return np.array(img)
+
+    def observation(self, observation: np.ndarray) -> np.ndarray:
+        self.unwrapped.original_obs = observation
+        return self.resize(observation)
 
 
 class CraftaxWrapper(gymnasium.ObservationWrapper):
